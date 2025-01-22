@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect} from 'react';
+import jsPDF from "jspdf";
 // import primeGearLogo from './images/primeGearLogo.png';
 import html2pdf from 'html2pdf.js';
 import { collection, addDoc, getDocs } from 'firebase/firestore'; // Firestore imports
@@ -7,6 +8,7 @@ import { query, where} from 'firebase/firestore';
 import { orderBy, startAt, endAt } from 'firebase/firestore';
 import debounce from 'lodash.debounce';
 import { limit } from 'firebase/firestore';
+import { getFirestore } from "firebase/firestore"; // Ensure this is included
 
 
 function Home({ moduleName, userId }) {
@@ -314,42 +316,132 @@ const calculateInsurance = () => {
 //   if (extraContent) extraContent.style.display = 'block';
 // };
 
-const downloadInvoiceAsPDF = () => {
-  const newDocumentId = generateDocumentId(); // Reuse unified function
-  setQuoteId(newDocumentId);
+// const downloadInvoiceAsPDF = () => {
+//   const newDocumentId = generateDocumentId(); // Reuse unified function
+//   setQuoteId(newDocumentId);
 
-  const element = componentRef.current;
+//   const element = componentRef.current;
 
-  const options = {
-    margin: [10, 10, 10, 10],
-    filename: `${newDocumentId}.pdf`,
-    html2canvas: {
-      scale: 2,
-      useCORS: true,
-      onclone: (clonedDocument) => {
-        console.log(clonedDocument); // Check if content is as expected
-        const watermark = clonedDocument.createElement('div');
-        watermark.style.position = 'fixed';
-        watermark.style.top = '0';
-        watermark.style.left = '0';
-        watermark.style.width = '100%';
-        watermark.style.height = '100%';
-        watermark.style.background = `url(${WatermarkBase64}) center center / contain no-repeat`;
-        watermark.style.opacity = '0.1';
-        watermark.style.pointerEvents = 'none';
-        watermark.style.zIndex = '-1';
+//   const options = {
+//     margin: [10, 10, 10, 10],
+//     filename: `${newDocumentId}.pdf`,
+//     html2canvas: {
+//       scale: 2,
+//       useCORS: true,
+//       onclone: (clonedDocument) => {
+//         console.log(clonedDocument); // Check if content is as expected
+//         const watermark = clonedDocument.createElement('div');
+//         watermark.style.position = 'fixed';
+//         watermark.style.top = '0';
+//         watermark.style.left = '0';
+//         watermark.style.width = '100%';
+//         watermark.style.height = '100%';
+//         watermark.style.background = `url(${WatermarkBase64}) center center / contain no-repeat`;
+//         watermark.style.opacity = '0.1';
+//         watermark.style.pointerEvents = 'none';
+//         watermark.style.zIndex = '-1';
 
-        clonedDocument.body.appendChild(watermark);
-      },
-    },
-    jsPDF: { unit: 'pt', format: 'a4', orientation: 'portrait' },
-  };
+//         clonedDocument.body.appendChild(watermark);
+//       },
+//     },
+//     jsPDF: { unit: 'pt', format: 'a4', orientation: 'portrait' },
+//   };
 
-  html2pdf()
-    .set(options)
-    .from(element)
-    .save();
+//   html2pdf()
+//     .set(options)
+//     .from(element)
+//     .save();
+// };
+
+const downloadInvoiceAsPDF = async () => {
+  try {
+    // Step 1: Generate PDF
+    console.log("Generating PDF...");
+    const pdfBlob = await generatePDFBlob();
+    console.log("PDF generated successfully!");
+
+    // Step 2: Convert Blob to Base64
+    console.log("Converting PDF Blob to Base64...");
+    const base64File = await blobToBase64(pdfBlob);
+    console.log("Conversion successful!");
+
+    // Step 3: Upload to Netlify
+    console.log("Uploading to Netlify...");
+    const fileName = `${documentType}-${QuoteId}.pdf`;
+    const response = await fetch("/.netlify/functions/upload-pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base64File, fileName }),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      console.error("Netlify upload error:", result.error);
+      throw new Error("Upload to Netlify failed");
+    }
+
+    console.log("Upload successful! File URL:", result.fileUrl);
+
+    // Step 4: Save Metadata to Firestore
+    console.log("Saving log to Firestore...");
+    const logData = {
+      documentType,
+      quoteId: QuoteId,
+      clientName,
+      clientAddress,
+      clientEmail,
+      items,
+      total: calculateNetTotal(),
+      pdfUrl: result.fileUrl,
+      createdAt: new Date(),
+    };
+
+    await addDoc(collection(db, "logs"), logData);
+    console.log("Log saved to Firestore!");
+
+    // Step 5: Trigger download
+    const downloadLink = document.createElement("a");
+    downloadLink.href = result.fileUrl;
+    downloadLink.download = fileName;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    downloadLink.remove();
+
+    alert("PDF saved and downloaded successfully!");
+  } catch (error) {
+    console.error("Error occurred:", error.message, error);
+    alert("Something went wrong: " + error.message);
+  }
 };
+
+
+const blobToBase64 = (blob) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+
+
+const generatePDFBlob = async () => {
+  const doc = new jsPDF();
+
+  // Add example content (customize as needed)
+  doc.text("Invoice", 10, 10);
+  doc.text(`Client Name: ${clientName}`, 10, 20);
+  doc.text(`Address: ${clientAddress}`, 10, 30);
+  doc.text(`Email: ${clientEmail}`, 10, 40);
+
+  // Add items (table, list, etc.)
+  items.forEach((item, index) => {
+    doc.text(`${item.description} - $${item.price}`, 10, 50 + index * 10);
+  });
+
+  // Return the Blob for uploading and downloading
+  return doc.output("blob");
+};
+
 
 
 
